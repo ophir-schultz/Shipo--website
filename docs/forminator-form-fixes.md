@@ -61,6 +61,19 @@ form. Read the **TTFB / waiting** figure on that POST.
 - **TTFB is fast, total is 5s** → it is front-end: script load, a reCAPTCHA
   challenge resolving, or the success animation. Different problem.
 
+**Prior finding — check this first.** The `Marketing expansion strategy`
+session (2026-09-25) recorded **"NitroPack JS delay likely culprit"** for this
+same complaint. NitroPack defers JavaScript execution until user interaction —
+a FRONT-END cause, which shows up as fast TTFB with a slow total. That session
+was itself blocked waiting on the DevTools check above, so this is a lead, not
+a confirmation; but it came from a session working the site directly and it
+outranks the server-side theory below. If the measurement says front-end, the
+fix is in NitroPack's settings — disable "Delay JS execution", or exclude the
+Forminator scripts from it — and Forminator is not involved at all.
+
+Three sessions (2026-09-25, and two on 2026-09-26) have now stalled on this
+same missing measurement. Take the number before theorising further.
+
 Assuming it is server-side, these are the causes in order of how often they are
 the answer:
 

@@ -49,3 +49,16 @@ field names) and `form_watch.py` will report `!! <page> changed shape since
 baseline` on the next run. That is correct behaviour and self-clears after one
 run, because the baseline rewrites itself. Firing twice means something changed
 that nobody intended.
+
+## Check other sessions before re-deriving anything
+
+Work on shipousa.com is spread across several sessions and they do not share
+context. Before diagnosing anything about the site, list the account's sessions
+and read their `post_turn_summary` — it records what each one concluded and
+what it was blocked on. As of 2026-09-26 three separate sessions had stalled on
+the same unmeasured DevTools number for the slow form, each re-deriving a
+different theory instead of checking what the last one found.
+
+Known prior finding: `Marketing expansion strategy` (2026-09-25) recorded
+**"NitroPack JS delay likely culprit"** for the slow contact form. See
+`docs/forminator-form-fixes.md`.
