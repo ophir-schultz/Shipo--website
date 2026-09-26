@@ -36,7 +36,7 @@ out in the inbox.** Everything else is UNKNOWN, never OK.
 ## Run
 
 ```sh
-/usr/bin/python3 engine/form_watch.py --self-test        # 29 assertions
+/usr/bin/python3 engine/form_watch.py --self-test        # 33 assertions
 /usr/bin/python3 engine/form_watch.py \
     --site https://shipousa.com \
     --pages "/,/contact-us/,/partner-program/" \
@@ -51,6 +51,27 @@ out in the inbox.** Everything else is UNKNOWN, never OK.
 `--chat-origin` is load bearing. The route's `ALLOWED_ORIGINS` is an allow-list
 of Shipo's own origins, so a probe sent without a matching `Origin` header is
 refused and the chat reads as down every day for a reason unrelated to the chat.
+
+### The chat has TWO lead paths, and both are probed
+
+They are different branches sending different emails, and the first can be
+perfectly healthy while the second is dead:
+
+| probe | what the visitor does | email it must produce |
+|---|---|---|
+| `chat lead` | leaves an address | *Website chat lead — &lt;address&gt;* |
+| `chat agent request` | asks for a human, leaves nothing | *asked for a person — no contact details left* |
+
+The agent-request probe deliberately carries **no** email address. An address
+anywhere in the text routes the conversation down the lead path, and the branch
+we meant to test never runs — a probe that quietly checks the wrong thing.
+
+Its canary token travels in the message text rather than in an address, which
+works because that email quotes the conversation back. The token is therefore
+still in the body for the inbox search to find.
+
+This branch matters most: the visitor has already asked to be contacted, so a
+silent failure here loses someone who was ready to talk.
 
 ## Submitting the forms
 

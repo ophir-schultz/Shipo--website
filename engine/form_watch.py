@@ -330,38 +330,59 @@ def probe_form(page_url, form, canary_email, token, origin, jar=None):
 
 # ---------------------------------------------------------------- chat probe
 
-def probe_chat(endpoint, origin, canary_email, token):
-    """Send one message containing the canary address through the chat API.
+def chat_lead_message(token, canary_email):
+    """A visitor who leaves contact details. Triggers the 'chat lead' email."""
+    return ("Automated monitoring probe %s — please ignore. "
+            "Reach me at %s" % (token, canary_email))
+
+
+def chat_agent_message(token):
+    """A visitor who asks for a human and leaves NOTHING behind.
+
+    This is a different trigger from the lead path and it sends a different
+    email ('asked for a person, no contact details'), so it has to be probed
+    separately: the lead path can be perfectly healthy while this one is dead,
+    and this is the one where the visitor is already asking to be called back.
+
+    It deliberately carries no email address. An address in the text would put
+    the conversation down the lead path instead and this branch would never run
+    — a probe that quietly tests the wrong thing.
+    """
+    return ("Automated monitoring probe %s — please ignore, no reply needed. "
+            "I would like to speak to a human agent please." % token)
+
+
+def probe_chat(endpoint, origin, token, message, kind="lead"):
+    """Send one message through the chat API and classify the response.
 
     The Origin header is mandatory and load bearing: the route's ALLOWED_ORIGINS
     is an allow-list of the site's own origins, so a probe sent without it is
     refused and the chat would be reported down every day for a reason that has
     nothing to do with the chat.
     """
+    stage = "chat %s" % kind
     payload = json.dumps({
-        "messages": [{"role": "user", "content":
-                      "Automated monitoring probe %s — please ignore. "
-                      "Reach me at %s" % (token, canary_email)}],
+        "messages": [{"role": "user", "content": message}],
         "page": "form-watch probe",
     })
     r = fetch(endpoint, data=payload, method="POST", headers={
         "Content-Type": "application/json", "Origin": origin, "Referer": origin + "/",
     })
     if r.error:
-        return {"stage": "chat", "state": "UNREACHABLE", "detail": r.error}
+        return {"stage": stage, "state": "UNREACHABLE", "detail": r.error}
     if r.status == 403:
-        return {"stage": "chat", "state": "CORS_REFUSED",
+        return {"stage": stage, "state": "CORS_REFUSED",
                 "detail": "origin %s is not on the endpoint's allow-list" % origin}
     if not r.ok:
-        return {"stage": "chat", "state": "HTTP_%d" % r.status, "detail": r.body[:200]}
+        return {"stage": stage, "state": "HTTP_%d" % r.status, "detail": r.body[:200]}
     try:
         reply = (json.loads(r.body) or {}).get("reply") or ""
     except ValueError:
-        return {"stage": "chat", "state": "BAD_JSON", "detail": r.body[:200]}
+        return {"stage": stage, "state": "BAD_JSON", "detail": r.body[:200]}
     if not reply.strip():
-        return {"stage": "chat", "state": "EMPTY_REPLY", "detail": r.body[:200]}
+        return {"stage": stage, "state": "EMPTY_REPLY", "detail": r.body[:200]}
     # Responded is NOT delivered. Lead capture on this route is fire-and-forget.
-    return {"stage": "chat", "state": "RESPONDED", "detail": reply[:160]}
+    return {"stage": stage, "state": "RESPONDED", "detail": reply[:160]}
 
 
 # ---------------------------------------------------------------- inbox
@@ -531,6 +552,16 @@ def self_test():
     check("collapses a radio group to one value", filled["mode-1"], "air")
     check("puts the token in the message", tok2 in filled["message-1"], True)
 
+    # The two chat branches. The agent request must carry NO address, or it
+    # goes down the lead path and this branch is never exercised.
+    lead_msg = chat_lead_message("tok-A", "Support+tok-A@shipousa.com")
+    agent_msg = chat_agent_message("tok-B")
+    check("chat lead message carries the canary",
+          "Support+tok-A@shipousa.com" in lead_msg, True)
+    check("chat agent message carries its token", "tok-B" in agent_msg, True)
+    check("chat agent message asks for a human", "human" in agent_msg.lower(), True)
+    check("chat agent message leaves no address", "@" in agent_msg, False)
+
     body, ctype = encode_body([("email-1", "a+b@c.d")], "application/x-www-form-urlencoded")
     check("urlencodes the body", b"email-1=a%2Bb%40c.d" in body, True)
     mbody, mctype = encode_body([("email-1", "a@b.c")], "multipart/form-data")
@@ -655,7 +686,7 @@ def main():
                 label = "form %s%s" % (path, (" #" + f["id"]) if f["id"] else "")
                 sub = probe_form(origin + path, f, addr, tok, origin, jar=page_jars.get(path))
                 results.append(sub)
-                print("  %-28s %s  %s" % (label[:28], sub["state"], sub["detail"][:60]))
+                print("  %-34s %s  %s" % (label, sub["state"], sub["detail"][:60]))
                 if sub["state"] == "POSTED":
                     pending[tok] = label
     else:
@@ -663,16 +694,30 @@ def main():
                         "detail": "--submit-forms not set; form delivery not verified"})
         print("\n  forms                        UNKNOWN  --submit-forms not set")
 
-    # 3. The chat, end to end.
+    # 3. The chat, end to end — BOTH of its lead paths.
+    #    Leaving an address and asking for a human are different branches
+    #    sending different emails. Probing only the first would leave the
+    #    callback request, where the visitor has already asked to be phoned,
+    #    completely unwatched.
     if a.chat_endpoint:
         tok = canary_token()
         addr = canary_address(a.lead_inbox, tok)
         print("\n  chat probe %s -> %s" % (tok, addr))
-        c = probe_chat(a.chat_endpoint, a.chat_origin, addr, tok)
+        c = probe_chat(a.chat_endpoint, a.chat_origin, tok,
+                       chat_lead_message(tok, addr), kind="lead")
         results.append(c)
-        print("  %-28s %s  %s" % ("chat response", c["state"], c["detail"][:90]))
+        print("  %-28s %s  %s" % ("chat lead response", c["state"], c["detail"][:80]))
         if c["state"] == "RESPONDED":
             pending[tok] = "chat lead"
+
+        atok = canary_token()
+        print("  chat agent-request probe %s" % atok)
+        ac = probe_chat(a.chat_endpoint, a.chat_origin, atok,
+                        chat_agent_message(atok), kind="agent request")
+        results.append(ac)
+        print("  %-28s %s  %s" % ("chat agent response", ac["state"], ac["detail"][:80]))
+        if ac["state"] == "RESPONDED":
+            pending[atok] = "chat agent request"
     else:
         results.append({"stage": "chat", "state": "UNKNOWN",
                         "detail": "no --chat-endpoint configured; chat not checked"})
@@ -690,7 +735,7 @@ def main():
             d = dict(found[tok])
             d["stage"] = "%s delivery" % label
             results.append(d)
-            print("  %-28s %s  %s" % (d["stage"][:28], d["state"], d["detail"]))
+            print("  %-34s %s  %s" % (d["stage"], d["state"], d["detail"]))
 
     code = verdict(results)
     print("\nVERDICT %s" % {0: "ALL PROVEN", 1: "FINDINGS", 2: "COULD NOT FULLY CHECK"}[code])
