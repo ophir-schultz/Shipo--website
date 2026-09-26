@@ -36,7 +36,7 @@ out in the inbox.** Everything else is UNKNOWN, never OK.
 ## Run
 
 ```sh
-/usr/bin/python3 engine/form_watch.py --self-test        # 33 assertions
+/usr/bin/python3 engine/form_watch.py --self-test        # 38 assertions
 /usr/bin/python3 engine/form_watch.py \
     --site https://shipousa.com \
     --pages "/,/contact-us/,/partner-program/" \
@@ -51,6 +51,18 @@ out in the inbox.** Everything else is UNKNOWN, never OK.
 `--chat-origin` is load bearing. The route's `ALLOWED_ORIGINS` is an allow-list
 of Shipo's own origins, so a probe sent without a matching `Origin` header is
 refused and the chat reads as down every day for a reason unrelated to the chat.
+
+### Point it at a stable alias, never a deployment URL
+
+Vercel gives every deployment its own `<name>-<hash>-<scope>.vercel.app`
+address, and that address dies the next time anything ships. Aimed at one, the
+monitor passes today and then reports the chat unreachable every morning after
+the next deploy — an outage that exists only in the monitor's own config.
+
+`EPHEMERAL_ENDPOINT` is a finding, not a warning, because it will silently
+become a false alarm and false alarms get the whole report ignored. Use the
+stable alias the website itself calls (a scoped alias, a bare project alias, or
+a custom domain such as `chat.shipousa.com` — all three pass).
 
 ### The chat has TWO lead paths, and both are probed
 

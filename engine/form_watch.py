@@ -330,6 +330,33 @@ def probe_form(page_url, form, canary_email, token, origin, jar=None):
 
 # ---------------------------------------------------------------- chat probe
 
+_HASHY = re.compile(r"^(?=.*[0-9])(?=.*[a-z])[a-z0-9]{8,12}$")
+
+
+def is_ephemeral_deploy_url(endpoint):
+    """True for a per-DEPLOYMENT Vercel URL rather than a stable alias.
+
+    Vercel gives every deployment its own <name>-<hash>-<scope>.vercel.app
+    address, and that address dies the next time anything ships. Point the
+    monitor at one and it passes today, then reports the chat unreachable
+    every morning after the next deploy — an outage that exists only in the
+    monitor's config. The site itself calls a stable alias, so that is what
+    this must watch.
+
+    The hash sits BETWEEN the project name and the team scope, never first or
+    last, and always mixes letters with digits. A plain project name like
+    shipo-chat.vercel.app, a scoped alias, or a custom domain are all fine.
+    """
+    try:
+        host = urllib.parse.urlparse(endpoint).hostname or ""
+    except ValueError:
+        return False
+    if not host.endswith(".vercel.app"):
+        return False
+    parts = host[:-len(".vercel.app")].split("-")
+    return any(_HASHY.match(seg) for seg in parts[1:-1])
+
+
 def chat_lead_message(token, canary_email):
     """A visitor who leaves contact details. Triggers the 'chat lead' email."""
     return ("Automated monitoring probe %s — please ignore. "
@@ -552,6 +579,18 @@ def self_test():
     check("collapses a radio group to one value", filled["mode-1"], "air")
     check("puts the token in the message", tok2 in filled["message-1"], True)
 
+    # A monitor pointed at a per-deployment URL passes today and lies later.
+    check("flags a per-deployment Vercel URL", is_ephemeral_deploy_url(
+        "https://shipo-chat-8lqtfd5we-shipo-llc-s-projects.vercel.app/api/chat"), True)
+    check("allows a bare project alias",
+          is_ephemeral_deploy_url("https://shipo-chat.vercel.app/api/chat"), False)
+    check("allows a scoped project alias", is_ephemeral_deploy_url(
+        "https://shipo-chat-shipo-llc-s-projects.vercel.app/api/chat"), False)
+    check("allows a custom domain",
+          is_ephemeral_deploy_url("https://chat.shipousa.com/api/chat"), False)
+    check("allows a project name ending in a digit",
+          is_ephemeral_deploy_url("https://shipo-system1.vercel.app/api/chat"), False)
+
     # The two chat branches. The agent request must carry NO address, or it
     # goes down the lead path and this branch is never exercised.
     lead_msg = chat_lead_message("tok-A", "Support+tok-A@shipousa.com")
@@ -587,7 +626,7 @@ def verdict(results):
     """A path is OK only when a canary was seen in the inbox."""
     bad = [r for r in results if r["state"] in
            ("UNREACHABLE", "CORS_REFUSED", "BAD_JSON", "EMPTY_REPLY", "ABSENT",
-            "REJECTED", "NO_LEAD_FORM")
+            "REJECTED", "NO_LEAD_FORM", "EPHEMERAL_ENDPOINT")
            or r["state"].startswith("HTTP_")]
     unknown = [r for r in results if r["state"] == "UNKNOWN"]
     if bad:
@@ -699,6 +738,14 @@ def main():
     #    sending different emails. Probing only the first would leave the
     #    callback request, where the visitor has already asked to be phoned,
     #    completely unwatched.
+    if a.chat_endpoint and is_ephemeral_deploy_url(a.chat_endpoint):
+        results.append({"stage": "chat endpoint", "state": "EPHEMERAL_ENDPOINT",
+                        "detail": "%s is a per-deployment URL; it dies on the next "
+                                  "deploy. Point --chat-endpoint at the stable alias "
+                                  "the website itself calls." % a.chat_endpoint})
+        print("\n  %-34s %s  %s" % ("chat endpoint", "EPHEMERAL_ENDPOINT",
+                                     "per-deployment URL, use the stable alias"))
+
     if a.chat_endpoint:
         tok = canary_token()
         addr = canary_address(a.lead_inbox, tok)
